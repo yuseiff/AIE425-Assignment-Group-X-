@@ -162,3 +162,71 @@ class Discounted_AdjustedCosine_ItemBased_RS(AdjustedCosine_ItemBased_RS):
         if np.sum(k_sims) == 0: return 0.0
         
         return np.sum(k_sims * k_ratings) / np.sum(k_sims)
+    
+
+import numpy as np
+
+class ItemBased_AdjustedCosine_RS:
+    def __init__(self, matrix):
+        """
+        matrix: Rows=Users, Cols=Items
+        """
+        self.matrix = np.array(matrix, dtype=float)
+        self.user_means = None
+        self.matrix_centered = None
+        
+    def fit(self):
+        with np.errstate(invalid='ignore'):
+            self.user_means = np.nanmean(self.matrix, axis=1)
+        
+        # (This is the definition of Adjusted Cosine)
+        self.user_means = np.nan_to_num(self.user_means)
+        self.matrix_centered = self.matrix - self.user_means[:, np.newaxis]
+        self.matrix_centered = np.nan_to_num(self.matrix_centered) # Fill NaNs with 0
+        
+        # Norm = sqrt(sum( (r_ui - r_u_bar)^2 ))
+        self.item_norms = np.sqrt(np.sum(self.matrix_centered**2, axis=0))
+        self.item_norms[self.item_norms == 0] = 1e-9
+
+    def get_similar_items(self, target_i_idx, candidate_indices):
+        """
+        Computes sim between target item and specific candidate items.
+        """
+        target_vec = self.matrix_centered[:, target_i_idx]
+        target_norm = self.item_norms[target_i_idx]
+        
+        sims = []
+        
+        # Candidates matrix shape: (Users, N_candidates)
+        candidates_mat = self.matrix_centered[:, candidate_indices]
+        candidates_norms = self.item_norms[candidate_indices]
+        
+        # Dot product: (Users) @ (Users, Candidates) -> (Candidates) doesn't work directly 1D vs 2D
+        # We do: target (1, U) dot candidates (U, N)
+        dots = np.dot(target_vec, candidates_mat)
+        
+        # Cosine = Dot / (NormA * NormB)
+        denominators = target_norm * candidates_norms
+        similarities = dots / denominators
+        
+        return similarities
+
+    def predict(self, u_idx, i_idx, neighbor_indices, neighbor_sims):
+        # Weighted Sum Formula: sum(sim * rating) / sum(|sim|)
+        
+        neighbor_ratings = self.matrix[u_idx, neighbor_indices]
+        
+        mask = ~np.isnan(neighbor_ratings)
+        
+        if not np.any(mask):
+            return 0.0 
+            
+        valid_ratings = neighbor_ratings[mask]
+        valid_sims = neighbor_sims[mask]
+        
+        num = np.sum(valid_sims * valid_ratings)
+        den = np.sum(np.abs(valid_sims))
+        
+        if den == 0: return 0.0
+        
+        return num / den
